@@ -208,9 +208,11 @@ table.registry { width: 100%; border-collapse: collapse; font-size: 15px; }
 .registry tr:nth-child(even) td { background: rgba(255,255,255,.04); }
 
 /* Música */
-.music .yt-player { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
-.music-note { color: #ffe98a; font-size: 14px; }
-.now-playing { font-size: 15px; }
+.music .yt-player { position: relative; width: 100%; aspect-ratio: 16 / 9; border-radius: 12px; overflow: hidden; background: #000; margin: 10px 0; }
+.music .yt-player iframe { width: 100%; height: 100%; display: block; border: 0; }
+.btn-play { display: block; width: 100%; margin-top: 10px; font-size: 18px; padding: 12px; }
+.music-note { color: #ffe98a; font-size: 14px; min-height: 4.2em; }
+.now-playing { font-size: 15px; min-height: 1.4em; }
 .playlist { margin: 8px 0 0; padding-left: 22px; }
 .playlist li { margin: 4px 0; }
 .playlist button {
@@ -218,6 +220,7 @@ table.registry { width: 100%; border-collapse: collapse; font-size: 15px; }
   text-align: left; padding: 2px 0; text-decoration: underline dotted rgba(255,255,255,.4);
 }
 .playlist button:hover { color: #ffd500; }
+.playlist li.active button { color: #ffd500; font-weight: 700; text-decoration: underline; }
 
 /* Admin */
 .admin-ok { color: #7ee2a0; font-weight: 700; }

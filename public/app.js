@@ -254,8 +254,37 @@ async function doClaim(e) {
 }
 
 // ---------- Música parrandera (YouTube) ----------
+// El reproductor es VISIBLE (16:9) dentro de la tarjeta: un reproductor
+// invisible (0x0) no arranca la reproducción en varios navegadores.
+// Nada de playVideo/unMute antes de onReady: si el usuario toca antes,
+// la intención queda pendiente y se ejecuta cuando el reproductor está listo.
+// Sin lista de YouTube (parámetro playlist): con la lista, el reproductor
+// tiene que cargar los 7 videos antes de arrancar y en redes lentas falla
+// con error 150 y no suena nada. La cola se lleva en JS: se carga un video
+// a la vez y al terminar pasa al siguiente.
 let ytPlayer = null;
 let musicOn = false;
+let playerReady = false;
+let hasPlayed = false;
+let currentSong = 0;
+let pendingUnmute = false;
+let pendingSong = null;
+let lastSongPointer = 0;
+let lastErrorRecovery = 0;
+
+function highlightSong(idx) {
+  const ol = $('playlist');
+  if (!ol) return;
+  Array.from(ol.children).forEach((li, i) => {
+    li.classList.toggle('active', i === idx);
+  });
+}
+
+function updateNowPlaying(idx) {
+  const song = SONGS[idx];
+  if (song) $('nowPlaying').textContent = `${song.title} — ${song.artist}`;
+  if (idx >= 0) highlightSong(idx);
+}
 
 function renderPlaylist() {
   const ol = $('playlist');
@@ -265,22 +294,64 @@ function renderPlaylist() {
     const b = document.createElement('button');
     b.type = 'button';
     b.textContent = `${s.title} — ${s.artist}`;
+    // La canción se lanza en pointerdown (antes de que el primer toque
+    // cambie la nota y mueva la lista) y el clic queda como respaldo
+    // para teclado; si el pointerdown ya la lanzó, el clic se ignora.
+    b.addEventListener('pointerdown', () => {
+      lastSongPointer = Date.now();
+      playSong(i);
+    });
     b.addEventListener('click', () => {
-      if (ytPlayer && ytPlayer.playVideoAt) {
-        ytPlayer.playVideoAt(i);
-        unmuteMusic();
-      }
+      if (Date.now() - lastSongPointer < 800) return;
+      playSong(i);
     });
     li.appendChild(b);
     ol.appendChild(li);
   });
+  highlightSong(0);
+}
+
+function loadSong(i) {
+  currentSong = i;
+  ytPlayer.loadVideoById(SONGS[i].id);
+  highlightSong(i);
+}
+
+function playSong(i) {
+  // Solo se cambia directamente si el reproductor ya sonó al menos una
+  // vez; si no, se guarda la petición y se aplica al primer PLAYING.
+  if (playerReady && ytPlayer && typeof ytPlayer.loadVideoById === 'function' && hasPlayed) {
+    loadSong(i);
+  } else {
+    pendingSong = i;
+  }
+  highlightSong(i);
+  unmuteMusic();
 }
 
 function unmuteMusic() {
-  if (!ytPlayer || typeof ytPlayer.unMute !== 'function') return;
+  if (!playerReady || !ytPlayer || typeof ytPlayer.unMute !== 'function') {
+    pendingUnmute = true;
+    return;
+  }
   ytPlayer.unMute();
   ytPlayer.setVolume(90);
   ytPlayer.playVideo();
+  // Si medio segundo después el reproductor sigue sin reproducir
+  // (por ejemplo porque playVideo llegó antes de estar listo del todo),
+  // se reintenta una vez más.
+  setTimeout(() => {
+    try {
+      if (
+        ytPlayer &&
+        typeof ytPlayer.getPlayerState === 'function' &&
+        typeof YT !== 'undefined' &&
+        ytPlayer.getPlayerState() !== YT.PlayerState.PLAYING
+      ) {
+        ytPlayer.playVideo();
+      }
+    } catch (e) { /* el reproductor ya no existe; nada que hacer */ }
+  }, 500);
   if (!musicOn) {
     musicOn = true;
     $('musicNote').textContent = 'Parranda sonando. No se detiene: sigue sonando mientras giras la ruleta.';
@@ -289,32 +360,66 @@ function unmuteMusic() {
 
 window.onYouTubeIframeAPIReady = function onYouTubeIframeAPIReady() {
   ytPlayer = new YT.Player('ytPlayer', {
-    height: '0',
-    width: '0',
+    height: '100%',
+    width: '100%',
+    videoId: SONGS[0].id,
     playerVars: {
       autoplay: 1,
       mute: 1,
       controls: 0,
-      loop: 1,
-      playlist: SONGS.map((s) => s.id).join(','),
       disablekb: 1,
       fs: 0,
       modestbranding: 1,
       rel: 0,
+      playsinline: 1,
     },
     events: {
       onReady(event) {
+        playerReady = true;
         const iframe = document.querySelector('#ytPlayer iframe');
-        if (iframe) iframe.setAttribute('allow', 'autoplay; encrypted-media');
+        if (iframe) iframe.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture');
         event.target.setVolume(90);
         event.target.playVideo();
+        if (pendingUnmute) {
+          pendingUnmute = false;
+          unmuteMusic();
+        }
       },
       onStateChange(event) {
-        if (event.target.getPlaylistIndex) {
-          const idx = event.target.getPlaylistIndex();
-          const song = SONGS[idx];
-          if (song) $('nowPlaying').textContent = `${song.title} — ${song.artist}`;
+        if (event.data === YT.PlayerState.PLAYING) {
+          hasPlayed = true;
+          // Canción pedida antes de que sonara la primera: se aplica ahora.
+          if (pendingSong !== null) {
+            const idx = pendingSong;
+            pendingSong = null;
+            loadSong(idx);
+            return;
+          }
+          updateNowPlaying(currentSong);
+        } else if (event.data === YT.PlayerState.ENDED) {
+          // Al terminar una canción, pasa a la siguiente (y vuelve a la
+          // primera al final de la lista). El sonido sigue como estaba.
+          loadSong((currentSong + 1) % SONGS.length);
         }
+      },
+      onError(event) {
+        // Un video que falla (p. ej. error 150) no se reanuda con
+        // playVideo(): el reproductor queda trabado. Se salta al
+        // siguiente video de la lista para que la parranda no se
+        // detenga; el video fallido volverá a intentarse en la
+        // siguiente vuelta del bucle. Limitado a un salto cada 3 s
+        // para no entrar en bucle si no hay internet.
+        pendingSong = null;
+        const now = Date.now();
+        if (now - lastErrorRecovery < 3000) return;
+        lastErrorRecovery = now;
+        setTimeout(() => {
+          try {
+            if (ytPlayer && typeof ytPlayer.loadVideoById === 'function') {
+              loadSong((currentSong + 1) % SONGS.length);
+            }
+          } catch (e) { /* sin reproductor; nada que hacer */ }
+        }, 800);
       },
     },
   });
@@ -420,6 +525,7 @@ loadBoard();
 setInterval(loadBoard, 10000);
 
 $('spinBtn').addEventListener('click', doSpin);
+$('playMusicBtn').addEventListener('click', unmuteMusic);
 $('claimForm').addEventListener('submit', doClaim);
 $('spinAgainBtn').addEventListener('click', () => {
   drawn = null;
