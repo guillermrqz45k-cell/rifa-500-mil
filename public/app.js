@@ -526,6 +526,27 @@ setInterval(loadBoard, 10000);
 
 $('spinBtn').addEventListener('click', doSpin);
 $('playMusicBtn').addEventListener('click', unmuteMusic);
+$('copyBrebBtn').addEventListener('click', async () => {
+  const key = $('brebKey').textContent.trim();
+  const msg = $('copyBrebMsg');
+  try {
+    await navigator.clipboard.writeText(key);
+    msg.textContent = 'Llave copiada';
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = key;
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand('copy');
+      msg.textContent = 'Llave copiada';
+    } catch {
+      msg.textContent = 'Copia la llave: ' + key;
+    }
+    document.body.removeChild(ta);
+  }
+  setTimeout(() => { msg.textContent = ''; }, 3000);
+});
 $('claimForm').addEventListener('submit', doClaim);
 $('spinAgainBtn').addEventListener('click', () => {
   drawn = null;
